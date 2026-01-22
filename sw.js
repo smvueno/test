@@ -1,5 +1,5 @@
 // Service Worker for offline support
-const CACHE_NAME = 'fruit-bounce-v1-' + '1769048548872'; // Will be replaced at build time
+const CACHE_NAME = 'fruit-bounce-v1-' + '1769058397573'; // Will be replaced at build time
 const urlsToCache = [
     './',
     './index.html'
@@ -10,15 +10,15 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then((cache) => {
-                console.log('Opened cache');
+                console.log('✅ Service worker installed - cached files for offline use');
                 return cache.addAll(urlsToCache);
             })
             .catch((err) => {
-                console.error('Cache addAll failed:', err);
+                console.error('❌ Service worker cache failed:', err);
             })
     );
-    // Force the waiting service worker to become the active service worker
-    // self.skipWaiting(); // REMOVED: Wait for user command
+    // Don't auto-activate - wait for user confirmation via SKIP_WAITING message
+    // This allows the update modal to show and wait for user interaction
 });
 
 // Activate event - clean up old caches
@@ -28,13 +28,14 @@ self.addEventListener('activate', (event) => {
             return Promise.all(
                 cacheNames.map((cacheName) => {
                     if (cacheName !== CACHE_NAME) {
-                        console.log('Deleting old cache:', cacheName);
+                        console.log('🗑️ Cleaning up old cache:', cacheName);
                         return caches.delete(cacheName);
                     }
                 })
             );
         })
     );
+    console.log('✅ Service worker activated and ready');
     // Claim all clients immediately
     return self.clients.claim();
 });
@@ -43,11 +44,66 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
     const { request } = event;
 
-    // Skip Supabase API calls - always go to network
+    // Skip Supabase API calls - use stale-while-revalidate for leaderboard data
     if (request.url.includes('supabase.co')) {
-        return event.respondWith(fetch(request));
+        // For leaderboard endpoints, use stale-while-revalidate
+        if (request.url.includes('/leaderboard')) {
+            event.respondWith(
+                caches.match(request).then((cachedResponse) => {
+                    // Fetch fresh data in the background
+                    const fetchPromise = fetch(request).then((networkResponse) => {
+                        // Clone BEFORE using the response to avoid "body already used" error
+                        const responseToCache = networkResponse.clone();
+
+                        // Update cache with fresh data (async, no await needed)
+                        if (networkResponse.ok) {
+                            caches.open(CACHE_NAME).then((cache) => {
+                                cache.put(request, responseToCache);
+                            });
+                        }
+
+                        return networkResponse;
+                    }).catch(() => {
+                        // Network failed, return cached if available
+                        return cachedResponse;
+                    });
+
+                    // Return cached response immediately if available, otherwise wait for network
+                    return cachedResponse || fetchPromise;
+                })
+            );
+        } else {
+            // For other Supabase calls (auth, etc.), always use network
+            return event.respondWith(fetch(request));
+        }
+        return;
     }
 
+    // Google Fonts Caching - Cache First Strategy
+    if (request.url.includes('fonts.googleapis.com') || request.url.includes('fonts.gstatic.com')) {
+        event.respondWith(
+            caches.match(request).then((cachedResponse) => {
+                if (cachedResponse) {
+                    return cachedResponse;
+                }
+                const fetchRequest = request.clone();
+                return fetch(fetchRequest).then((response) => {
+                    // Check if valid response (allow opaque responses for CORS)
+                    if (!response || (response.status !== 200 && response.type !== 'opaque') || (response.type !== 'basic' && response.type !== 'cors' && response.type !== 'opaque')) {
+                        return response;
+                    }
+                    const responseToCache = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => {
+                        cache.put(request, responseToCache);
+                    });
+                    return response;
+                });
+            })
+        );
+        return;
+    }
+
+    // Cache-first strategy for static assets
     event.respondWith(
         caches.match(request)
             .then((response) => {

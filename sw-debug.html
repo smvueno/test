@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service Worker Debug Helper</title>
+    <style>
+        body {
+            font-family: 'Monaco', 'Courier New', monospace;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+
+        h1 {
+            color: #0f0;
+        }
+
+        button {
+            background: #00ff00;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #00cc00;
+        }
+
+        .log {
+            background: #000;
+            border: 2px solid #00ff00;
+            padding: 15px;
+            margin: 20px 0;
+            max-height: 400px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+
+        .status {
+            color: #ff0;
+            margin: 10px 0;
+        }
+
+        .error {
+            color: #f00;
+        }
+
+        .success {
+            color: #0f0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🔧 Service Worker Debug Helper</h1>
+
+    <div class="status" id="status">Loading...</div>
+
+    <div>
+        <button onclick="checkSW()">📋 Check SW Status</button>
+        <button onclick="forceUpdate()">🔄 Force Update Check</button>
+        <button onclick="unregisterSW()">🗑️ Unregister SW</button>
+        <button onclick="clearLogs()">✨ Clear Logs</button>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <script>
+        const log = (msg, type = 'info') => {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'error' : type === 'success' ? 'success' : '';
+            logDiv.innerHTML += `<div class="${className}">[${time}] ${msg}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
+
+        const updateStatus = (msg) => {
+            document.getElementById('status').textContent = msg;
+        };
+
+        const clearLogs = () => {
+            document.getElementById('log').innerHTML = '';
+            log('Logs cleared', 'success');
+        };
+
+        const checkSW = async () => {
+            if (!('serviceWorker' in navigator)) {
+                log('❌ Service Workers not supported!', 'error');
+                updateStatus('Service Workers NOT supported');
+                return;
+            }
+
+            log('Checking Service Worker status...', 'info');
+
+            const reg = await navigator.serviceWorker.getRegistration();
+
+            if (!reg) {
+                log('❌ No service worker registered', 'error');
+                updateStatus('No SW registered');
+                return;
+            }
+
+            log(`✅ Service Worker registered at: ${reg.scope}`, 'success');
+
+            if (reg.active) {
+                log(`🟢 ACTIVE: Service worker is active`, 'success');
+                log(`   - Script URL: ${reg.active.scriptURL}`, 'info');
+                log(`   - State: ${reg.active.state}`, 'info');
+            }
+
+            if (reg.waiting) {
+                log(`🟡 WAITING: New service worker is waiting!`, 'success');
+                log(`   - Script URL: ${reg.waiting.scriptURL}`, 'info');
+                log(`   - State: ${reg.waiting.state}`, 'info');
+                log(`   👉 This means an UPDATE IS AVAILABLE!`, 'success');
+                updateStatus('⚠️ UPDATE AVAILABLE (Waiting SW detected)');
+            } else {
+                log(`ℹ️ No waiting service worker`, 'info');
+                updateStatus('No update detected');
+            }
+
+            if (reg.installing) {
+                log(`🔄 INSTALLING: Service worker installing...`, 'info');
+                log(`   - Script URL: ${reg.installing.scriptURL}`, 'info');
+                log(`   - State: ${reg.installing.state}`, 'info');
+            }
+
+            if (navigator.serviceWorker.controller) {
+                log(`🎮 Controller: Page is controlled by SW`, 'success');
+                log(`   - Script URL: ${navigator.serviceWorker.controller.scriptURL}`, 'info');
+            } else {
+                log(`⚠️ No controller: Page not controlled by SW yet`, 'error');
+            }
+        };
+
+        const forceUpdate = async () => {
+            if (!('serviceWorker' in navigator)) {
+                log('❌ Service Workers not supported!', 'error');
+                return;
+            }
+
+            log('🔄 Forcing update check...', 'info');
+
+            const reg = await navigator.serviceWorker.getRegistration();
+
+            if (!reg) {
+                log('❌ No service worker to update', 'error');
+                return;
+            }
+
+            try {
+                await reg.update();
+                log('✅ Update check initiated', 'success');
+
+                // Wait a bit and check again
+                setTimeout(async () => {
+                    log('Checking status after update...', 'info');
+                    await checkSW();
+                }, 2000);
+            } catch (err) {
+                log(`❌ Error during update: ${err.message}`, 'error');
+            }
+        };
+
+        const unregisterSW = async () => {
+            if (!confirm('⚠️ This will unregister the service worker. Continue?')) {
+                return;
+            }
+
+            log('🗑️ Unregistering service worker...', 'info');
+
+            const reg = await navigator.serviceWorker.getRegistration();
+
+            if (!reg) {
+                log('❌ No service worker registered', 'error');
+                return;
+            }
+
+            const result = await reg.unregister();
+
+            if (result) {
+                log('✅ Service worker unregistered successfully', 'success');
+                log('💡 Refresh the page to re-register', 'info');
+                updateStatus('SW unregistered - refresh to re-register');
+            } else {
+                log('❌ Failed to unregister', 'error');
+            }
+        };
+
+        // Listen for SW updates
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            log('🔄 Controller changed! Page will reload...', 'success');
+            updateStatus('Controller changed - reloading...');
+        });
+
+        // Initial check
+        window.addEventListener('load', () => {
+            log('=== Service Worker Debug Helper Loaded ===', 'success');
+            checkSW();
+        });
+    </script>
+</body>
+
+</html>
