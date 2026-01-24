@@ -1,5 +1,5 @@
 // Service Worker for offline support
-const CACHE_NAME = 'fruit-bounce-v1-' + '1769228757545'; // Will be replaced at build time
+const CACHE_NAME = 'fruit-bounce-v1-' + '1769239497150'; // Will be replaced at build time
 const urlsToCache = [
     './',
     './index.html'
@@ -118,6 +118,17 @@ self.addEventListener('fetch', (event) => {
                 return fetch(fetchRequest).then((response) => {
                     // Check if valid response
                     if (!response || response.status !== 200 || response.type !== 'basic') {
+                        return response;
+                    }
+
+                    // SAFETY CHECK: In SPA mode, 404s often return index.html (text/html).
+                    // We must NOT cache index.html as a script or css file!
+                    const contentType = response.headers.get('content-type');
+                    const isHTML = contentType && contentType.includes('text/html');
+                    const isAsset = request.url.match(/\.(js|css|png|jpg|jpeg|svg|json)$/i);
+
+                    if (isAsset && isHTML) {
+                        console.warn('⚠️ Preventing caching of HTML response for asset:', request.url);
                         return response;
                     }
 
