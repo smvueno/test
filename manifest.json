@@ -1,6 +1,6 @@
 {
-  "name": "Fruit Bounce Merge",
-  "short_name": "FruitBounce",
+  "name": "FRUITY FUSE: Flick & Bounce",
+  "short_name": "FruityFuse",
   "description": "Merge fruits and bounce to the top!",
   "start_url": "./",
   "display": "standalone",
