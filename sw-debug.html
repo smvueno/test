@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Game update Debug Helper</title>
+    <title>Service Worker Debug Helper</title>
     <style>
         body {
             font-family: 'Monaco', 'Courier New', monospace;
@@ -60,7 +60,7 @@
 </head>
 
 <body>
-    <h1>🔧 Game update Debug Helper</h1>
+    <h1>🔧 Service Worker Debug Helper</h1>
 
     <div class="status" id="status">Loading...</div>
 
@@ -93,42 +93,42 @@
 
         const checkSW = async () => {
             if (!('serviceWorker' in navigator)) {
-                log('❌ Game updates not supported!', 'error');
-                updateStatus('Game updates NOT supported');
+                log('❌ Service Workers not supported!', 'error');
+                updateStatus('Service Workers NOT supported');
                 return;
             }
 
-            log('Checking Game update status...', 'info');
+            log('Checking Service Worker status...', 'info');
 
             const reg = await navigator.serviceWorker.getRegistration();
 
             if (!reg) {
-                log('❌ No Game update registered', 'error');
+                log('❌ No service worker registered', 'error');
                 updateStatus('No SW registered');
                 return;
             }
 
-            log(`✅ Game update registered at: ${reg.scope}`, 'success');
+            log(`✅ Service Worker registered at: ${reg.scope}`, 'success');
 
             if (reg.active) {
-                log(`🟢 ACTIVE: Game update is active`, 'success');
+                log(`🟢 ACTIVE: Service worker is active`, 'success');
                 log(`   - Script URL: ${reg.active.scriptURL}`, 'info');
                 log(`   - State: ${reg.active.state}`, 'info');
             }
 
             if (reg.waiting) {
-                log(`🟡 WAITING: New Game update is waiting!`, 'success');
+                log(`🟡 WAITING: New service worker is waiting!`, 'success');
                 log(`   - Script URL: ${reg.waiting.scriptURL}`, 'info');
                 log(`   - State: ${reg.waiting.state}`, 'info');
                 log(`   👉 This means an UPDATE IS AVAILABLE!`, 'success');
                 updateStatus('⚠️ UPDATE AVAILABLE (Waiting SW detected)');
             } else {
-                log(`ℹ️ No waiting Game update`, 'info');
+                log(`ℹ️ No waiting service worker`, 'info');
                 updateStatus('No update detected');
             }
 
             if (reg.installing) {
-                log(`🔄 INSTALLING: Game update installing...`, 'info');
+                log(`🔄 INSTALLING: Service worker installing...`, 'info');
                 log(`   - Script URL: ${reg.installing.scriptURL}`, 'info');
                 log(`   - State: ${reg.installing.state}`, 'info');
             }
@@ -143,7 +143,7 @@
 
         const forceUpdate = async () => {
             if (!('serviceWorker' in navigator)) {
-                log('❌ Game updates not supported!', 'error');
+                log('❌ Service Workers not supported!', 'error');
                 return;
             }
 
@@ -152,7 +152,7 @@
             const reg = await navigator.serviceWorker.getRegistration();
 
             if (!reg) {
-                log('❌ No Game update to update', 'error');
+                log('❌ No service worker to update', 'error');
                 return;
             }
 
@@ -171,23 +171,23 @@
         };
 
         const unregisterSW = async () => {
-            if (!confirm('⚠️ This will unregister the Game update. Continue?')) {
+            if (!confirm('⚠️ This will unregister the service worker. Continue?')) {
                 return;
             }
 
-            log('🗑️ Unregistering Game update...', 'info');
+            log('🗑️ Unregistering service worker...', 'info');
 
             const reg = await navigator.serviceWorker.getRegistration();
 
             if (!reg) {
-                log('❌ No Game update registered', 'error');
+                log('❌ No service worker registered', 'error');
                 return;
             }
 
             const result = await reg.unregister();
 
             if (result) {
-                log('✅ Game update unregistered successfully', 'success');
+                log('✅ Service worker unregistered successfully', 'success');
                 log('💡 Refresh the page to re-register', 'info');
                 updateStatus('SW unregistered - refresh to re-register');
             } else {
@@ -203,7 +203,7 @@
 
         // Initial check
         window.addEventListener('load', () => {
-            log('=== Game update Debug Helper Loaded ===', 'success');
+            log('=== Service Worker Debug Helper Loaded ===', 'success');
             checkSW();
         });
     </script>
