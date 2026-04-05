@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Rendering Benchmark</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; }
+        canvas { display: block; }
+        #hud {
+            position: fixed; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0,0,0,0.85); color: #fff; padding: 12px 16px;
+            border-radius: 8px; font-family: monospace; font-size: 13px;
+            line-height: 1.8; min-width: 280px;
+        }
+        #hud .row { display: flex; justify-content: space-between; }
+        .label { color: #94a3b8; }
+        .value { color: #fbbf24; font-weight: bold; }
+        .fps-good { color: #4ade80 !important; }
+        .fps-ok { color: #fbbf24 !important; }
+        .fps-bad { color: #ef4444 !important; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div class="row"><span class="label">Test:</span><span class="value" id="technique">-</span></div>
+        <div class="row"><span class="label">Clouds:</span><span class="value" id="count">-</span></div>
+        <div class="row"><span class="label">FPS:</span><span class="value" id="fps">-</span></div>
+        <div class="row"><span class="label">Avg FPS:</span><span class="value" id="avgFps">-</span></div>
+        <div class="row"><span class="label">Min FPS:</span><span class="value" id="minFps">-</span></div>
+        <div class="row"><span class="label">Time:</span><span class="value" id="elapsed">-</span></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
+    <script>
+        let app = null;
+        let testRunning = false;
+        let currentTicker = null;
+
+        async function init() {
+            app = new PIXI.Application();
+            await app.init({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                backgroundColor: 0x000000,
+                antialias: true,
+                resolution: window.devicePixelRatio || 1,
+                autoDensity: true,
+                preference: 'webgl',
+            });
+            document.body.appendChild(app.canvas);
+
+            window.addEventListener('resize', () => {
+                app.renderer.resize(window.innerWidth, window.innerHeight);
+            });
+
+            window.__ready = true;
+        }
+
+        function createCloudTexture() {
+            const g = new PIXI.Graphics();
+            g.circle(0, -20, 20);
+            g.circle(30, -30, 28);
+            g.circle(60, -20, 20);
+            g.fill({ color: 0xFFFFFF });
+            const texture = app.renderer.generateTexture({
+                target: g, resolution: 4, antialias: true,
+            });
+            g.destroy();
+            return texture;
+        }
+
+        function createBackground() {
+            const bg = new PIXI.Graphics();
+            bg.rect(0, 0, app.screen.width, app.screen.height);
+            bg.fill({ color: 0x1a1a2e });
+            return bg;
+        }
+
+        function makeClouds(count, vw, vh) {
+            const clouds = [];
+            for (let i = 0; i < count; i++) {
+                clouds.push({
+                    x: Math.random() * (vw + 200) - 100,
+                    y: Math.random() * (vh * 0.25),
+                    scale: 0.3 + Math.random() * 1.2,
+                    alpha: 0.3 + Math.random() * 0.5,
+                    speed: 0.5 + Math.random() * 2.5,
+                });
+            }
+            return clouds;
+        }
+
+        function animateClouds(clouds, vw) {
+            for (const c of clouds) {
+                c.x += c.userData.speed;
+                if (c.x > vw + 100) c.x = -100; // Loop: wrap to left side
+            }
+        }
+
+        window.__startBenchmark = async function(config) {
+            if (testRunning) return;
+            testRunning = true;
+
+            const { technique, count, duration } = config;
+            const vw = app.screen.width;
+            const vh = app.screen.height;
+
+            // Clear stage
+            app.stage.removeChildren();
+            if (currentTicker) { app.ticker.remove(currentTicker); currentTicker = null; }
+
+            const bg = createBackground();
+            app.stage.addChild(bg);
+
+            const fpsSamples = [];
+            let frameCount = 0;
+            let lastFpsTime = 0;
+            let currentFps = 0;
+            let minFps = Infinity;
+            let maxFps = 0;
+
+            document.getElementById('technique').textContent = technique;
+            document.getElementById('count').textContent = count;
+
+            let clouds = [];
+            let cloudTexture = null;
+            let batchGraphics = null;
+            let particleContainer = null;
+
+            if (technique === 'graphics') {
+                for (let i = 0; i < count; i++) {
+                    const g = new PIXI.Graphics();
+                    const c = makeClouds(1, vw, vh)[0];
+                    g.alpha = c.alpha;
+                    g.scale.set(c.scale);
+                    g.circle(0, -20, 20); g.circle(30, -30, 28); g.circle(60, -20, 20);
+                    g.fill({ color: 0xFFFFFF });
+                    g.x = c.x; g.y = c.y;
+                    g.userData = { speed: c.speed };
+                    clouds.push(g);
+                    app.stage.addChild(g);
+                }
+            }
+            else if (technique === 'sprite') {
+                cloudTexture = createCloudTexture();
+                for (let i = 0; i < count; i++) {
+                    const s = new PIXI.Sprite(cloudTexture);
+                    const c = makeClouds(1, vw, vh)[0];
+                    s.alpha = c.alpha; s.scale.set(c.scale);
+                    s.x = c.x; s.y = c.y;
+                    s.userData = { speed: c.speed };
+                    clouds.push(s);
+                    app.stage.addChild(s);
+                }
+            }
+            else if (technique === 'particleContainer') {
+                cloudTexture = createCloudTexture();
+                particleContainer = new PIXI.ParticleContainer({
+                    dynamicProperties: { position: true, scale: false, rotation: false, color: false },
+                });
+                app.stage.addChild(particleContainer);
+                const data = makeClouds(count, vw, vh);
+                for (const c of data) {
+                    const p = new PIXI.Particle(cloudTexture);
+                    p.x = c.x; p.y = c.y;
+                    p.alpha = c.alpha;
+                    p.scaleX = c.scale; p.scaleY = c.scale;
+                    p.userData = { speed: c.speed };
+                    clouds.push(p);
+                    particleContainer.addParticle(p);
+                }
+            }
+            else if (technique === 'batchedGraphics') {
+                batchGraphics = new PIXI.Graphics();
+                app.stage.addChild(batchGraphics);
+                clouds = makeClouds(count, vw, vh);
+            }
+
+            const startTime = performance.now();
+
+            return new Promise(resolve => {
+                currentTicker = (ticker) => {
+                    const elapsed = performance.now() - startTime;
+                    frameCount++;
+                    if (elapsed - lastFpsTime >= 200) {
+                        currentFps = (frameCount * 1000) / (elapsed - lastFpsTime);
+                        frameCount = 0;
+                        lastFpsTime = elapsed;
+                        fpsSamples.push(currentFps);
+                        if (currentFps < minFps) minFps = currentFps;
+                        if (currentFps > maxFps) maxFps = currentFps;
+
+                        const fpsEl = document.getElementById('fps');
+                        fpsEl.textContent = currentFps.toFixed(1);
+                        fpsEl.className = 'value ' + (currentFps >= 55 ? 'fps-good' : currentFps >= 30 ? 'fps-ok' : 'fps-bad');
+                        const avg = fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length;
+                        document.getElementById('avgFps').textContent = avg.toFixed(1);
+                        document.getElementById('minFps').textContent = minFps === Infinity ? '-' : minFps.toFixed(1);
+                        document.getElementById('elapsed').textContent = (elapsed / 1000).toFixed(1) + 's';
+                    }
+
+                    // Animate clouds with proper looping
+                    if (technique === 'batchedGraphics') {
+                        batchGraphics.clear();
+                        for (const c of clouds) {
+                            c.x += c.speed;
+                            if (c.x > vw + 100) c.x = -100; // Loop
+                            const s = c.scale;
+                            batchGraphics.circle(c.x, c.y - 20 * s, 20 * s);
+                            batchGraphics.circle(c.x + 30 * s, c.y - 30 * s, 28 * s);
+                            batchGraphics.circle(c.x + 60 * s, c.y - 20 * s, 20 * s);
+                            batchGraphics.fill({ color: 0xFFFFFF, alpha: c.alpha });
+                        }
+                    } else {
+                        animateClouds(clouds, vw);
+                    }
+
+                    // Background morph
+                    const t = elapsed * 0.001;
+                    const r = Math.floor(26 + Math.sin(t * 0.3) * 8);
+                    const g = Math.floor(26 + Math.sin(t * 0.5 + 1) * 8);
+                    const b = Math.floor(46 + Math.sin(t * 0.2 + 2) * 12);
+                    bg.fill({ color: (r << 16) | (g << 8) | b });
+
+                    if (elapsed >= duration) {
+                        app.ticker.remove(currentTicker);
+                        currentTicker = null;
+                        testRunning = false;
+
+                        const avgFps = fpsSamples.length > 0 ? fpsSamples.reduce((a, b) => a + b, 0) / fpsSamples.length : 0;
+                        window.__benchResults = {
+                            technique, count,
+                            avgFps,
+                            minFps: minFps === Infinity ? 0 : minFps,
+                            maxFps,
+                            samples: fpsSamples.length,
+                        };
+                        window.__benchDone = true;
+                        resolve(window.__benchResults);
+                    }
+                };
+                app.ticker.add(currentTicker);
+            });
+        };
+
+        init();
+    </script>
+</body>
+</html>

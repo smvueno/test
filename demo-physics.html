@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fruit Physics + ParticleContainer Benchmark</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; overflow: hidden; }
+        canvas { display: block; }
+        #hud {
+            position: fixed; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0,0,0,0.85); color: #fff; padding: 12px 16px;
+            border-radius: 8px; font-family: monospace; font-size: 13px;
+            line-height: 1.8; min-width: 260px;
+        }
+        #hud .row { display: flex; justify-content: space-between; gap: 16px; }
+        .label { color: #94a3b8; }
+        .value { color: #4ade80; font-weight: bold; }
+        .fps-good { color: #4ade80 !important; }
+        .fps-ok { color: #fbbf24 !important; }
+        .fps-bad { color: #ef4444 !important; }
+        #hint {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,0.5); font-family: monospace; font-size: 14px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div class="row"><span class="label">FPS:</span><span class="value" id="fps">-</span></div>
+        <div class="row"><span class="label">Min FPS:</span><span class="value" id="minFps">-</span></div>
+        <div class="row"><span class="label">Fruits:</span><span class="value" id="count">0</span></div>
+        <div class="row"><span class="label">Physics ms:</span><span class="value" id="physMs">-</span></div>
+        <div class="row"><span class="label">Render ms:</span><span class="value" id="renderMs">-</span></div>
+        <div class="row"><span class="label">Draw calls:</span><span class="value" id="drawCalls">-</span></div>
+    </div>
+    <div id="hint">Click anywhere to drop fruits • Physics + ParticleContainer test</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
+    <script>
+        // ─── CONFIG ───────────────────────────────────────────────
+        const V_WIDTH = 600;
+        const V_HEIGHT = 750;
+        const GRAVITY = 0.8;
+        const FRICTION = 0.98;
+        const WALL_DAMPING = 0.5;
+        const FLOOR_DAMPING = 0.4;
+        const FLOOR_Y = V_HEIGHT - 15;
+        const SUBSTEPS = 4;
+
+        // Fruit tiers: radius + color
+        const FRUITS = [
+            { radius: 22, color: '#D32F2F', name: 'Cherry' },
+            { radius: 32, color: '#F44336', name: 'Strawberry' },
+            { radius: 42, color: '#7B1FA2', name: 'Grape' },
+            { radius: 52, color: '#FF9800', name: 'Clementine' },
+            { radius: 65, color: '#FF5722', name: 'Orange' },
+            { radius: 80, color: '#8BC34A', name: 'Apple' },
+            { radius: 95, color: '#FDD835', name: 'Pineapple' },
+            { radius: 110, color: '#795548', name: 'Coconut' },
+            { radius: 130, color: '#FF7043', name: 'Pumpkin' },
+            { radius: 155, color: '#4CAF50', name: 'Watermelon' },
+        ];
+
+        // ─── STATE ────────────────────────────────────────────────
+        let app, pc, fruitTextures = [];
+        let fruits = []; // physics bodies
+        let particles = []; // ParticleContainer particles
+        let nextId = 0;
+        let scaleFactor = 1;
+        let offsetX = 0, offsetY = 0;
+
+        // FPS tracking
+        let frames = 0, lastFpsTime = performance.now();
+        let currentFps = 0, minFps = Infinity;
+        let physMs = 0, renderMs = 0;
+
+        // ─── INIT ─────────────────────────────────────────────────
+        async function init() {
+            app = new PIXI.Application();
+            await app.init({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                backgroundColor: 0x1a1a2e,
+                antialias: true,
+                resolution: window.devicePixelRatio || 1,
+                autoDensity: true,
+                // NO FPS CAP — runs at max refresh rate
+                preference: 'webgl',
+            });
+            document.body.appendChild(app.canvas);
+
+            // Generate fruit textures
+            for (const f of FRUITS) {
+                const g = new PIXI.Graphics();
+                g.circle(0, 0, f.radius);
+                g.fill({ color: f.color });
+                // Simple face
+                g.circle(-f.radius * 0.25, -f.radius * 0.15, f.radius * 0.12);
+                g.circle(f.radius * 0.25, -f.radius * 0.15, f.radius * 0.12);
+                g.fill({ color: 0x000000 });
+                // Mouth
+                g.arc(0, f.radius * 0.1, f.radius * 0.2, 0, Math.PI);
+                g.stroke({ width: 2, color: 0x000000 });
+
+                const tex = app.renderer.generateTexture({
+                    target: g, resolution: 2, antialias: true,
+                });
+                g.destroy();
+                fruitTextures.push(tex);
+            }
+
+            // ParticleContainer for ALL fruits — 1 draw call
+            pc = new PIXI.ParticleContainer({
+                dynamicProperties: {
+                    position: true,
+                    scale: true,
+                    rotation: false,
+                    color: false,
+                },
+            });
+            app.stage.addChild(pc);
+
+            // Handle resize
+            window.addEventListener('resize', onResize);
+            onResize();
+
+            // Click to drop fruit
+            app.canvas.addEventListener('pointerdown', (e) => {
+                const rect = app.canvas.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / scaleFactor + offsetX;
+                const tier = Math.floor(Math.random() * 5); // random tier 0-4
+                spawnFruit(x, 50, tier);
+            });
+
+            // Game loop — UNLOCKED FPS
+            app.ticker.maxFPS = 0; // 0 = uncapped
+            app.ticker.add(tick);
+
+            console.log('✅ Fruit Physics + ParticleContainer test running — FPS UNLOCKED');
+        }
+
+        function onResize() {
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            scaleFactor = Math.min(vw / V_WIDTH, vh / V_HEIGHT);
+            offsetX = (vw / scaleFactor - V_WIDTH) / 2;
+            offsetY = (vh / scaleFactor - V_HEIGHT) / 2;
+            pc.scale.set(scaleFactor);
+            pc.position.set(
+                (vw - V_WIDTH * scaleFactor) / 2,
+                (vh - V_HEIGHT * scaleFactor) / 2
+            );
+        }
+
+        // ─── PHYSICS ──────────────────────────────────────────────
+        function spawnFruit(x, y, tier) {
+            const f = FRUITS[tier];
+            const id = nextId++;
+
+            // Create Particle
+            const particle = new PIXI.Particle(fruitTextures[tier]);
+            particle.x = x;
+            particle.y = y;
+            particle.anchorX = 0.5;
+            particle.anchorY = 0.5;
+            pc.addParticle(particle);
+
+            const fruit = {
+                id, x, y, vx: 0, vy: 0,
+                radius: f.radius,
+                tier,
+                particle,
+            };
+            fruits.push(fruit);
+            particles.push(particle);
+
+            document.getElementById('count').textContent = fruits.length;
+        }
+
+        function mergeFruits(a, b) {
+            // Remove both, spawn next tier at midpoint
+            const newTier = Math.min(a.tier + 1, FRUITS.length - 1);
+            const mx = (a.x + b.x) / 2;
+            const my = (a.y + b.y) / 2;
+
+            // Remove old
+            removeFruit(a);
+            removeFruit(b);
+
+            // Spawn new
+            spawnFruit(mx, my, newTier);
+        }
+
+        function removeFruit(fruit) {
+            const idx = fruits.indexOf(fruit);
+            if (idx >= 0) fruits.splice(idx, 1);
+
+            const pIdx = particles.indexOf(fruit.particle);
+            if (pIdx >= 0) {
+                pc.removeParticle(pIdx);
+                particles.splice(pIdx, 1);
+            }
+
+            document.getElementById('count').textContent = fruits.length;
+        }
+
+        function physicsStep() {
+            const t0 = performance.now();
+
+            for (const f of fruits) {
+                f.vy += GRAVITY;
+                f.vx *= FRICTION;
+                f.vy *= FRICTION;
+                f.x += f.vx;
+                f.y += f.vy;
+
+                // Floor collision
+                if (f.y + f.radius > FLOOR_Y) {
+                    f.y = FLOOR_Y - f.radius;
+                    f.vy *= -FLOOR_DAMPING;
+                    f.vx *= 0.9;
+                    f.vr = 0;
+                }
+
+                // Wall collisions
+                if (f.x - f.radius < 0) {
+                    f.x = f.radius;
+                    f.vx *= -WALL_DAMPING;
+                }
+                if (f.x + f.radius > V_WIDTH) {
+                    f.x = V_WIDTH - f.radius;
+                    f.vx *= -WALL_DAMPING;
+                }
+            }
+
+            // Fruit-fruit collisions
+            for (let i = 0; i < fruits.length; i++) {
+                for (let j = i + 1; j < fruits.length; j++) {
+                    const a = fruits[i];
+                    const b = fruits[j];
+                    if (!a || !b) continue;
+
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const minDist = a.radius + b.radius;
+
+                    if (dist < minDist && dist > 0) {
+                        // Same tier → merge
+                        if (a.tier === b.tier && a.tier < FRUITS.length - 1) {
+                            mergeFruits(a, b);
+                            continue;
+                        }
+
+                        // Push apart
+                        const overlap = minDist - dist;
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+                        a.x -= nx * overlap * 0.5;
+                        a.y -= ny * overlap * 0.5;
+                        b.x += nx * overlap * 0.5;
+                        b.y += ny * overlap * 0.5;
+
+                        // Bounce
+                        const dvx = a.vx - b.vx;
+                        const dvy = a.vy - b.vy;
+                        const dvDotN = dvx * nx + dvy * ny;
+
+                        if (dvDotN > 0) {
+                            const massA = a.radius * a.radius;
+                            const massB = b.radius * b.radius;
+                            const totalMass = massA + massB;
+                            const impulse = 2 * dvDotN / totalMass;
+
+                            a.vx -= impulse * massB * nx * 0.8;
+                            a.vy -= impulse * massB * ny * 0.8;
+                            b.vx += impulse * massA * nx * 0.8;
+                            b.vy += impulse * massA * ny * 0.8;
+                        }
+                    }
+                }
+            }
+
+            physMs = performance.now() - t0;
+        }
+
+        function renderFruits() {
+            const t0 = performance.now();
+
+            for (const f of fruits) {
+                f.particle.x = f.x;
+                f.particle.y = f.y;
+            }
+
+            renderMs = performance.now() - t0;
+        }
+
+        function tick() {
+            // Physics with substeps
+            for (let s = 0; s < SUBSTEPS; s++) {
+                physicsStep();
+            }
+
+            // Render
+            renderFruits();
+
+            // FPS counter
+            frames++;
+            const now = performance.now();
+            if (now - lastFpsTime >= 250) {
+                currentFps = (frames * 1000) / (now - lastFpsTime);
+                frames = 0;
+                lastFpsTime = now;
+                if (currentFps < minFps) minFps = currentFps;
+
+                const fpsEl = document.getElementById('fps');
+                fpsEl.textContent = currentFps.toFixed(1);
+                fpsEl.className = 'value ' + (currentFps >= 120 ? 'fps-good' : currentFps >= 60 ? 'fps-ok' : 'fps-bad');
+
+                document.getElementById('minFps').textContent = minFps === Infinity ? '-' : minFps.toFixed(1);
+                document.getElementById('physMs').textContent = physMs.toFixed(2);
+                document.getElementById('renderMs').textContent = renderMs.toFixed(2);
+                document.getElementById('drawCalls').textContent = '1 (ParticleContainer)';
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
